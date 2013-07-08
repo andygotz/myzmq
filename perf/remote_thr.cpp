@@ -77,6 +77,7 @@ int main (int argc, char *argv [])
 #if defined ZMQ_MAKE_VALGRIND_HAPPY
         memset (zmq_msg_data (&msg), 0, message_size);
 #endif
+        /* add message counter to message as first 4 bytes */
         *((int*)zmq_msg_data(&msg)) = msg_counter++;
 
         rc = zmq_sendmsg (s, &msg, 0);
