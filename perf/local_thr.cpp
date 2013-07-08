@@ -42,6 +42,8 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #define MAX_THREADS 10
 
@@ -59,12 +61,20 @@ static char *disk_name;
  * Andy Götz (ESRF) , 6 July 2013
  */
 void *file_writer(void *msg_copy) {
-	char fn[1024];
+	char fn[1024], dn[1024];
 	FILE * fd;
 	zmq_msg_t *msg = (zmq_msg_t*) msg_copy;
 
+	struct stat sb;
 	if (strcmp(disk_name, "/network") != 0) {
-		sprintf(fn, "%s/data/test%06d.dat", disk_name, thread_ctr);
+
+		/* check if directory exists, if not create it */
+		sprintf(dn, "%s/data/test%06d", disk_name, thread_ctr / 1000);
+		stat(dn, &sb);
+		if (errno == ENOENT) {
+			mkdir(dn, S_IRWXU);
+		}
+		sprintf(fn, "%s/test%06d.dat", dn, thread_ctr);
 		fd = fopen(fn, "wc");
 		if (fd == NULL) {
 			printf("file_writer(): failed to open file %s\n", fn);
@@ -102,6 +112,7 @@ int main(int argc, char *argv[]) {
 	int msg_counter, new_msg_counter;
 	char hostname[80];
 	int no_threads;
+	time_t start_time, elapsed_sec;
 
 	if (argc < 5) {
 		printf(
@@ -115,10 +126,10 @@ int main(int argc, char *argv[]) {
 	disk_name = argv[4];
 	no_threads = 1;
 	if (argc > 5) {
-	    no_threads = atoi(argv[5]);
-	    if (no_threads > MAX_THREADS)
-		no_threads = MAX_THREADS;
-        }
+		no_threads = atoi(argv[5]);
+		if (no_threads > MAX_THREADS)
+			no_threads = MAX_THREADS;
+	}
 	printf(
 			"#local_thr local host %s disk %s bind to %s message size %s message count %s writer threads %d\n",
 			hostname, argv[4], argv[1], argv[2], argv[3], no_threads);
@@ -164,6 +175,7 @@ int main(int argc, char *argv[]) {
 
 	watch = zmq_stopwatch_start();
 	watch_1000 = zmq_stopwatch_start();
+	start_time = time(NULL);
 
 	pthread_t file_writer_thread[MAX_THREADS];
 	for (i = 0; i < MAX_THREADS; i++) {
@@ -185,9 +197,11 @@ int main(int argc, char *argv[]) {
 		}
 		new_msg_counter = *(int*) zmq_msg_data(&msg);
 
-		 if ((new_msg_counter - msg_counter) != 1) {
-		 printf ("error in zmq_msg_data(), previous %d and current %d counter, data corrupt!\n", msg_counter, new_msg_counter);
-		 }
+		if ((new_msg_counter - msg_counter) != 1) {
+			printf(
+					"error in zmq_msg_data(), previous %d and current %d counter, data corrupt!\n",
+					msg_counter, new_msg_counter);
+		}
 
 		msg_counter = *(int*) zmq_msg_data(&msg);
 		msg_copy = new (zmq_msg_t);
@@ -203,13 +217,15 @@ int main(int argc, char *argv[]) {
 		thread_ctr++;
 		if (i > 0 && i % 1000 == 0) {
 			elapsed = zmq_stopwatch_stop(watch_1000);
+			elapsed_sec = time(NULL) - start_time;
 			throughput = (unsigned long) ((double) 1000 / (double) elapsed
 					* 1000000);
 			megabytes = (double) (throughput * message_size) / 1000000;
 			megabits = (double) (throughput * message_size * 8) / 1000000;
 
-			printf("%d [msg/s]  %.3f [MB/s] %.3f [Mb/s]\n", (int) throughput,
-					(double) megabytes, (double) megabits);
+			printf("%d [s] %d [msg/s]  %.3f [MB/s] %.3f [Mb/s]\n",
+					(int) elapsed_sec, (int) throughput, (double) megabytes,
+					(double) megabits);
 			fflush(stdout);
 			watch_1000 = zmq_stopwatch_start();
 		}
